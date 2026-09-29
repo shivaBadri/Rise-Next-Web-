@@ -1,0 +1,505 @@
+// Rise Next – Interactive 3D Real Estate Platform
+// Multi-tenant: Organization -> Project -> (Building) -> Unit
+// 3D: ThreeDAsset (versioned) -> ThreeDObject -> Unit / Amenity
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ---------- Tenancy & Users ----------
+
+model Organization {
+  id        String    @id @default(cuid())
+  name      String
+  slug      String    @unique
+  logoUrl   String?
+  website   String?
+  phone     String?
+  email     String?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  users     User[]
+  projects  Project[]
+}
+
+enum Role {
+  SUPER_ADMIN
+  ORG_ADMIN
+  PROJECT_ADMIN
+  SALES_MANAGER
+  SALES_EXECUTIVE
+  CONTENT_MANAGER
+  VIEWER
+}
+
+model User {
+  id             String        @id @default(cuid())
+  email          String        @unique
+  name           String
+  passwordHash   String
+  role           Role          @default(VIEWER)
+  phone          String?
+  isActive       Boolean       @default(true)
+  organizationId String?
+  organization   Organization? @relation(fields: [organizationId], references: [id])
+  projectAccess  ProjectMember[]
+  assignedLeads  Lead[]        @relation("AssignedLeads")
+  assignedVisits SiteVisit[]   @relation("AssignedVisits")
+  auditLogs      AuditLog[]
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+}
+
+model ProjectMember {
+  userId    String
+  projectId String
+  user      User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  @@id([userId, projectId])
+}
+
+// ---------- Projects ----------
+
+enum ProjectType {
+  PLOTTED
+  VILLA
+  APARTMENT
+  MIXED
+  COMMERCIAL
+  TOWNSHIP
+}
+
+enum ProjectStatus {
+  UPCOMING
+  PRE_LAUNCH
+  LAUNCHED
+  UNDER_CONSTRUCTION
+  READY_TO_MOVE
+  COMPLETED
+  ARCHIVED
+}
+
+model Project {
+  id              String        @id @default(cuid())
+  organizationId  String
+  organization    Organization  @relation(fields: [organizationId], references: [id])
+  name            String
+  slug            String        @unique
+  tagline         String?
+  description     String?
+  type            ProjectType   @default(PLOTTED)
+  status          ProjectStatus @default(LAUNCHED)
+  isPublished     Boolean       @default(false)
+  domain          String?       @unique
+  // Branding
+  logoUrl         String?
+  coverImageUrl   String?
+  coverVideoUrl   String?
+  brandColor      String        @default("#0f766e")
+  // Facts
+  developerName   String?
+  reraNumber      String?
+  totalAreaText   String?       // e.g. "52 Acres"
+  totalUnits      Int?
+  configuration   String?       // e.g. "150–300 Sq. Yd plots" / "2 & 3 BHK"
+  possessionText  String?
+  startingPrice   Decimal?      @db.Decimal(14, 2)
+  priceUnitLabel  String        @default("Sq. Yd") // pricing basis label
+  highlights      String[]      @default([])
+  brochureUrl     String?
+  // Location
+  addressLine     String?
+  city            String?
+  state           String?
+  pincode         String?
+  latitude        Float?
+  longitude       Float?
+  mapEmbedUrl     String?
+  // Contact
+  salesPhone      String?
+  whatsappNumber  String?       // E.164 without +, e.g. 919876543210
+  salesEmail      String?
+  // SEO
+  seoTitle        String?
+  seoDescription  String?
+  ogImageUrl      String?
+  // Marketing
+  ga4Id           String?
+  gtmId           String?
+  metaPixelId     String?
+  gadsConversionId String?
+  // Relations
+  phases          ProjectPhase[]
+  buildings       Building[]
+  units           Unit[]
+  floorPlans      FloorPlan[]
+  amenities       Amenity[]
+  media           Media[]
+  landmarks       Landmark[]
+  threeDAssets    ThreeDAsset[]
+  leads           Lead[]
+  siteVisits      SiteVisit[]
+  updates         ProjectUpdate[]
+  members         ProjectMember[]
+  auditLogs       AuditLog[]
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  @@index([organizationId])
+}
+
+model ProjectPhase {
+  id        String   @id @default(cuid())
+  projectId String
+  project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  name      String
+  order     Int      @default(0)
+  units     Unit[]
+  buildings Building[]
+}
+
+model Building {
+  id          String        @id @default(cuid())
+  projectId   String
+  project     Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  phaseId     String?
+  phase       ProjectPhase? @relation(fields: [phaseId], references: [id])
+  name        String        // "Tower A"
+  code        String        // "A"
+  floors      Int           @default(1)
+  unitsPerFloor Int?
+  description String?
+  objectKey   String?       // 3D object name e.g. tower_A
+  units       Unit[]
+  createdAt   DateTime      @default(now())
+
+  @@unique([projectId, code])
+}
+
+// ---------- Inventory ----------
+
+enum UnitType {
+  PLOT
+  VILLA
+  APARTMENT
+  COMMERCIAL
+}
+
+enum UnitStatus {
+  AVAILABLE
+  RESERVED
+  SOLD
+  BLOCKED
+  HOLD
+}
+
+enum Facing {
+  NORTH
+  SOUTH
+  EAST
+  WEST
+  NORTH_EAST
+  NORTH_WEST
+  SOUTH_EAST
+  SOUTH_WEST
+}
+
+model Unit {
+  id            String        @id @default(cuid())
+  projectId     String
+  project       Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  phaseId       String?
+  phase         ProjectPhase? @relation(fields: [phaseId], references: [id])
+  buildingId    String?
+  building      Building?     @relation(fields: [buildingId], references: [id])
+  type          UnitType      @default(PLOT)
+  number        String        // "142", "A101", "V-101"
+  floor         Int?
+  area          Decimal       @db.Decimal(12, 2)
+  areaUnit      String        @default("Sq. Yd") // Sq. Yd / Sq. Ft
+  dimensions    String?       // "30 x 45"
+  facing        Facing?
+  bedrooms      Int?
+  bathrooms     Int?
+  balconies     Int?
+  parking       Int?
+  price         Decimal?      @db.Decimal(14, 2)
+  pricePerUnit  Decimal?      @db.Decimal(12, 2)
+  status        UnitStatus    @default(AVAILABLE)
+  isCorner      Boolean       @default(false)
+  description   String?
+  features      String[]      @default([])
+  floorPlanId   String?
+  floorPlan     FloorPlan?    @relation(fields: [floorPlanId], references: [id])
+  media         Media[]
+  threeDObjects ThreeDObject[]
+  leads         Lead[]
+  siteVisits    SiteVisit[]
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  @@unique([projectId, number])
+  @@index([projectId, status])
+}
+
+model FloorPlan {
+  id          String   @id @default(cuid())
+  projectId   String
+  project     Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  name        String   // "3 BHK East"
+  imageUrl    String?
+  pdfUrl      String?
+  area        Decimal? @db.Decimal(12, 2)
+  areaUnit    String   @default("Sq. Ft")
+  bedrooms    Int?
+  bathrooms   Int?
+  balconies   Int?
+  parking     Int?
+  specs       Json?
+  units       Unit[]
+  createdAt   DateTime @default(now())
+}
+
+model Amenity {
+  id            String        @id @default(cuid())
+  projectId     String
+  project       Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  name          String
+  icon          String?       // emoji or icon key
+  description   String?
+  imageUrl      String?
+  objectKey     String?       // 3D object e.g. clubhouse
+  order         Int           @default(0)
+  threeDObjects ThreeDObject[]
+}
+
+enum MediaKind {
+  IMAGE
+  VIDEO
+  DRONE_VIDEO
+  CONSTRUCTION
+  PANORAMA_360
+  WALKTHROUGH
+  RENDER
+  DOCUMENT
+}
+
+model Media {
+  id        String    @id @default(cuid())
+  projectId String
+  project   Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  unitId    String?
+  unit      Unit?     @relation(fields: [unitId], references: [id], onDelete: SetNull)
+  updateId  String?
+  update    ProjectUpdate? @relation(fields: [updateId], references: [id], onDelete: SetNull)
+  kind      MediaKind @default(IMAGE)
+  url       String
+  thumbnailUrl String?
+  title     String?
+  order     Int       @default(0)
+  createdAt DateTime  @default(now())
+
+  @@index([projectId, kind])
+}
+
+model Landmark {
+  id         String  @id @default(cuid())
+  projectId  String
+  project    Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  category   String  // School / Hospital / Airport / Railway / Road / IT Hub / Shopping
+  name       String
+  distanceKm Float?
+  minutes    Int?
+  order      Int     @default(0)
+}
+
+// ---------- 3D ----------
+
+enum AssetStatus {
+  DRAFT
+  TESTING
+  PUBLISHED
+  ARCHIVED
+}
+
+enum ObjectKind {
+  UNIT
+  BUILDING
+  AMENITY
+  ROAD
+  LANDSCAPE
+  ENTRANCE
+  OTHER
+}
+
+model ThreeDAsset {
+  id          String        @id @default(cuid())
+  projectId   String
+  project     Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  version     Int
+  name        String
+  fileUrl     String?       // GLB on CDN; null => use procedural demo layout
+  fileSizeKb  Int?
+  status      AssetStatus   @default(DRAFT)
+  cameraJson  Json?         // default camera position/target/views
+  notes       String?
+  objects     ThreeDObject[]
+  publishedAt DateTime?
+  createdAt   DateTime      @default(now())
+
+  @@unique([projectId, version])
+}
+
+model ThreeDObject {
+  id         String      @id @default(cuid())
+  assetId    String
+  asset      ThreeDAsset @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  objectKey  String      // mesh/node name in GLB: plot_001, tower_A, clubhouse
+  kind       ObjectKind  @default(UNIT)
+  unitId     String?
+  unit       Unit?       @relation(fields: [unitId], references: [id], onDelete: SetNull)
+  amenityId  String?
+  amenity    Amenity?    @relation(fields: [amenityId], references: [id], onDelete: SetNull)
+  // Procedural geometry (used when no GLB): position/size/rotation in metres
+  geomJson   Json?
+  labelPos   Json?
+
+  @@unique([assetId, objectKey])
+}
+
+// ---------- Leads ----------
+
+enum LeadSource {
+  WEBSITE_ENQUIRY
+  CALLBACK
+  SITE_VISIT
+  GET_PRICE
+  BROCHURE
+  WHATSAPP
+  WALK_IN
+  PHONE
+  META_ADS
+  GOOGLE_ADS
+  OTHER
+}
+
+enum LeadStatus {
+  NEW
+  CONTACTED
+  INTERESTED
+  SITE_VISIT
+  NEGOTIATION
+  CONVERTED
+  LOST
+}
+
+model Lead {
+  id           String     @id @default(cuid())
+  projectId    String
+  project      Project    @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  unitId       String?
+  unit         Unit?      @relation(fields: [unitId], references: [id], onDelete: SetNull)
+  name         String
+  phone        String
+  email        String?
+  message      String?
+  source       LeadSource @default(WEBSITE_ENQUIRY)
+  status       LeadStatus @default(NEW)
+  utmSource    String?
+  utmMedium    String?
+  utmCampaign  String?
+  utmContent   String?
+  referrer     String?
+  landingPage  String?
+  assignedToId String?
+  assignedTo   User?      @relation("AssignedLeads", fields: [assignedToId], references: [id])
+  notes        LeadNote[]
+  siteVisits   SiteVisit[]
+  ipHash       String?
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+
+  @@index([projectId, status])
+  @@index([phone])
+}
+
+model LeadNote {
+  id        String   @id @default(cuid())
+  leadId    String
+  lead      Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  authorName String
+  body      String
+  createdAt DateTime @default(now())
+}
+
+enum VisitStatus {
+  REQUESTED
+  CONFIRMED
+  RESCHEDULED
+  COMPLETED
+  CANCELLED
+  NO_SHOW
+}
+
+model SiteVisit {
+  id            String      @id @default(cuid())
+  projectId     String
+  project       Project     @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  leadId        String?
+  lead          Lead?       @relation(fields: [leadId], references: [id], onDelete: SetNull)
+  unitId        String?
+  unit          Unit?       @relation(fields: [unitId], references: [id], onDelete: SetNull)
+  name          String
+  phone         String
+  email         String?
+  preferredDate DateTime
+  preferredTime String      // "10:00 AM"
+  status        VisitStatus @default(REQUESTED)
+  assignedToId  String?
+  assignedTo    User?       @relation("AssignedVisits", fields: [assignedToId], references: [id])
+  notes         String?
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+
+  @@index([projectId, status])
+}
+
+// ---------- Content ----------
+
+model ProjectUpdate {
+  id          String   @id @default(cuid())
+  projectId   String
+  project     Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  title       String
+  body        String?
+  date        DateTime
+  isPublished Boolean  @default(true)
+  media       Media[]
+  createdAt   DateTime @default(now())
+}
+
+// ---------- Audit ----------
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  projectId  String?
+  project    Project? @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  userId     String?
+  user       User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  userName   String
+  entity     String   // "Unit", "Project", "Lead", "ThreeDAsset"
+  entityId   String
+  entityLabel String? // "Plot P-142"
+  action     String   // CREATE / UPDATE / DELETE / STATUS_CHANGE / PUBLISH
+  before     Json?
+  after      Json?
+  createdAt  DateTime @default(now())
+
+  @@index([entity, entityId])
+  @@index([projectId, createdAt])
+}
